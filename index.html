@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Interactive Three.js Cube</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        overflow: hidden;
+        background: radial-gradient(
+          circle at 50% 30%,
+          #22324f 0,
+          #111827 45%,
+          #05070d 100%
+        );
+        color: #f8fafc;
+      }
+
+      #scene {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        cursor: grab;
+      }
+
+      #scene.dragging {
+        cursor: grabbing;
+      }
+
+      .panel {
+        position: fixed;
+        top: 1rem;
+        left: 1rem;
+        display: grid;
+        gap: 0.9rem;
+        max-width: min(26rem, calc(100vw - 2rem));
+        padding: 0.9rem 1rem;
+        border: 1px solid rgb(148 163 184 / 30%);
+        border-radius: 0.9rem;
+        background: rgb(15 23 42 / 78%);
+        box-shadow: 0 18px 50px rgb(0 0 0 / 28%);
+        backdrop-filter: blur(10px);
+      }
+
+      .instructions {
+        user-select: none;
+      }
+
+      .instructions h1 {
+        margin: 0 0 0.4rem;
+        font-size: 1rem;
+        letter-spacing: 0.01em;
+      }
+
+      .instructions p {
+        margin: 0;
+        color: #cbd5e1;
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+
+      .model-picker {
+        display: grid;
+        gap: 0.4rem;
+      }
+
+      .model-upload {
+        display: grid;
+        gap: 0.4rem;
+      }
+
+      .model-picker label,
+      .model-upload label {
+        color: #e2e8f0;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .model-picker select,
+      .model-upload input {
+        width: 100%;
+        border: 1px solid rgb(125 211 252 / 42%);
+        border-radius: 0.65rem;
+        padding: 0.65rem 0.75rem;
+        background: rgb(15 23 42 / 88%);
+        color: #f8fafc;
+        font: inherit;
+        outline: none;
+      }
+
+      .model-picker select {
+        padding-right: 2.25rem;
+      }
+
+      .model-upload input::file-selector-button {
+        margin-right: 0.75rem;
+        border: 0;
+        border-radius: 0.5rem;
+        padding: 0.45rem 0.65rem;
+        background: #38bdf8;
+        color: #082f49;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+      }
+
+      .model-picker select:focus,
+      .model-upload input:focus {
+        border-color: #facc15;
+        box-shadow: 0 0 0 3px rgb(250 204 21 / 20%);
+      }
+
+      .upload-status {
+        min-height: 1.2rem;
+        color: #cbd5e1;
+        font-size: 0.82rem;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene" aria-label="Interactive 3D cube scene"></canvas>
+    <aside class="panel">
+      <div class="instructions">
+        <h1>Interactive cube</h1>
+        <p>
+          Pick a built-in model or upload your own .obj file, drag to rotate the
+          cube, then click the cube to lift its top face and reveal the selected
+          model inside.
+        </p>
+      </div>
+      <div class="model-picker">
+        <label for="modelSelect">Load model</label>
+        <select
+          id="modelSelect"
+          aria-label="Choose a model to load in the scene"
+        >
+          <option value="sphere">Glowing sphere</option>
+          <option value="torus">Torus knot</option>
+          <option value="capsule">Capsule</option>
+          <option value="diamond">Diamond</option>
+          <option value="custom" disabled>Uploaded OBJ</option>
+        </select>
+      </div>
+      <div class="model-upload">
+        <label for="objFileInput">Upload .obj</label>
+        <input
+          id="objFileInput"
+          type="file"
+          accept=".obj,model/obj,text/plain"
+        />
+        <p id="uploadStatus" class="upload-status" aria-live="polite">
+          Choose a Wavefront OBJ file to load it inside the cube.
+        </p>
+      </div>
+    </aside>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+      import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+
+      const canvas = document.querySelector("#scene");
+      const modelSelect = document.querySelector("#modelSelect");
+      const customModelOption = modelSelect.querySelector(
+        'option[value="custom"]',
+      );
+      const objFileInput = document.querySelector("#objFileInput");
+      const uploadStatus = document.querySelector("#uploadStatus");
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+      const scene = new THREE.Scene();
+      scene.fog = new THREE.Fog(0x05070d, 8, 18);
+
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        100,
+      );
+      camera.position.set(4.4, 3.2, 5.6);
+      camera.lookAt(0, 0, 0);
+
+      const cubeGroup = new THREE.Group();
+      cubeGroup.rotation.set(-0.22, 0.58, 0.08);
+      scene.add(cubeGroup);
+
+      const cubeSize = 2;
+      const half = cubeSize / 2;
+      const faceMaterial = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        metalness: 0.12,
+        roughness: 0.42,
+        side: THREE.DoubleSide,
+      });
+      const topMaterial = new THREE.MeshStandardMaterial({
+        color: 0xfacc15,
+        metalness: 0.08,
+        roughness: 0.38,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 1,
+      });
+      const edgeMaterial = new THREE.LineBasicMaterial({
+        color: 0xe0f2fe,
+        transparent: true,
+        opacity: 0.55,
+      });
+      const planeGeometry = new THREE.PlaneGeometry(cubeSize, cubeSize);
+
+      const interactiveMeshes = [];
+
+      function addFace(name, position, rotation, material = faceMaterial) {
+        const face = new THREE.Mesh(planeGeometry, material);
+        face.name = name;
+        face.position.copy(position);
+        face.rotation.set(rotation.x, rotation.y, rotation.z);
+        face.receiveShadow = true;
+        face.castShadow = true;
+        cubeGroup.add(face);
+        interactiveMeshes.push(face);
+        return face;
+      }
+
+      addFace("front", new THREE.Vector3(0, 0, half), new THREE.Euler(0, 0, 0));
+      addFace(
+        "back",
+        new THREE.Vector3(0, 0, -half),
+        new THREE.Euler(0, Math.PI, 0),
+      );
+      addFace(
+        "left",
+        new THREE.Vector3(-half, 0, 0),
+        new THREE.Euler(0, -Math.PI / 2, 0),
+      );
+      addFace(
+        "right",
+        new THREE.Vector3(half, 0, 0),
+        new THREE.Euler(0, Math.PI / 2, 0),
+      );
+      addFace(
+        "bottom",
+        new THREE.Vector3(0, -half, 0),
+        new THREE.Euler(Math.PI / 2, 0, 0),
+      );
+
+      const topFace = addFace(
+        "top",
+        new THREE.Vector3(0, half, 0),
+        new THREE.Euler(-Math.PI / 2, 0, 0),
+        topMaterial,
+      );
+
+      const edgeHelper = new THREE.LineSegments(
+        new THREE.EdgesGeometry(
+          new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize),
+        ),
+        edgeMaterial,
+      );
+      cubeGroup.add(edgeHelper);
+
+      const modelAnchor = new THREE.Group();
+      modelAnchor.name = "loaded-model-anchor";
+      modelAnchor.scale.setScalar(0.1);
+      cubeGroup.add(modelAnchor);
+
+      const objLoader = new OBJLoader();
+      const customObjMaterial = new THREE.MeshStandardMaterial({
+        color: 0xfbbf24,
+        metalness: 0.18,
+        roughness: 0.32,
+      });
+
+      const loadedModels = {
+        sphere: {
+          name: "Glowing sphere",
+          scale: 1,
+          create() {
+            return new THREE.Mesh(
+              new THREE.SphereGeometry(0.55, 48, 32),
+              new THREE.MeshStandardMaterial({
+                color: 0xf472b6,
+                emissive: 0x6d123f,
+                emissiveIntensity: 0.25,
+                metalness: 0.25,
+                roughness: 0.22,
+              }),
+            );
+          },
+        },
+        torus: {
+          name: "Torus knot",
+          scale: 0.72,
+          create() {
+            return new THREE.Mesh(
+              new THREE.TorusKnotGeometry(0.42, 0.14, 120, 18),
+              new THREE.MeshStandardMaterial({
+                color: 0xa78bfa,
+                metalness: 0.45,
+                roughness: 0.18,
+              }),
+            );
+          },
+        },
+        capsule: {
+          name: "Capsule",
+          scale: 0.85,
+          create() {
+            return new THREE.Mesh(
+              new THREE.CapsuleGeometry(0.32, 0.78, 12, 32),
+              new THREE.MeshStandardMaterial({
+                color: 0x34d399,
+                metalness: 0.2,
+                roughness: 0.28,
+              }),
+            );
+          },
+        },
+        diamond: {
+          name: "Diamond",
+          scale: 0.85,
+          create() {
+            return new THREE.Mesh(
+              new THREE.OctahedronGeometry(0.66, 0),
+              new THREE.MeshStandardMaterial({
+                color: 0x67e8f9,
+                metalness: 0.05,
+                roughness: 0.08,
+                transparent: true,
+                opacity: 0.82,
+              }),
+            );
+          },
+        },
+      };
+
+      let activeModel = null;
+      let activeModelScale = loadedModels.sphere.scale;
+      let customObjText = "";
+      let customObjName = "";
+      let isOpen = false;
+
+      function disposeObject(object) {
+        object.traverse((child) => {
+          if (!child.isMesh) return;
+          child.geometry?.dispose();
+          const materials = Array.isArray(child.material)
+            ? child.material
+            : [child.material];
+          materials.filter(Boolean).forEach((material) => material.dispose());
+        });
+      }
+
+      function prepareModel(object) {
+        object.traverse((child) => {
+          if (!child.isMesh) return;
+          child.castShadow = true;
+          child.receiveShadow = true;
+
+          if (!child.material) {
+            child.material = customObjMaterial.clone();
+          }
+        });
+      }
+
+      function getNormalizedModelScale(object) {
+        const box = new THREE.Box3().setFromObject(object);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        const maxDimension = Math.max(size.x, size.y, size.z);
+
+        object.position.sub(center);
+
+        if (!Number.isFinite(maxDimension) || maxDimension === 0) {
+          return 1;
+        }
+
+        return 1.35 / maxDimension;
+      }
+
+      function replaceActiveModel(model, name, scale) {
+        if (activeModel) {
+          modelAnchor.remove(activeModel);
+          disposeObject(activeModel);
+        }
+
+        activeModel = model;
+        activeModel.name = name;
+        activeModelScale = scale;
+        modelAnchor.add(activeModel);
+      }
+
+      function loadModel(modelKey) {
+        if (modelKey === "custom" && customObjText) {
+          loadObjText(customObjText, customObjName);
+          return;
+        }
+
+        const modelConfig = loadedModels[modelKey] ?? loadedModels.sphere;
+        const model = modelConfig.create();
+        prepareModel(model);
+        replaceActiveModel(model, modelConfig.name, modelConfig.scale);
+      }
+
+      function loadObjText(objText, fileName) {
+        const objModel = objLoader.parse(objText);
+        const meshCount = objModel.children.length;
+        prepareModel(objModel);
+        const normalizedScale = getNormalizedModelScale(objModel);
+        replaceActiveModel(objModel, fileName, normalizedScale);
+
+        customObjText = objText;
+        customObjName = fileName;
+        customModelOption.textContent = fileName;
+        customModelOption.disabled = false;
+        modelSelect.value = "custom";
+        uploadStatus.textContent = `Loaded ${fileName} with ${meshCount} top-level object${
+          meshCount === 1 ? "" : "s"
+        }.`;
+        isOpen = true;
+      }
+
+      loadModel(modelSelect.value);
+      modelSelect.addEventListener("change", (event) => {
+        loadModel(event.target.value);
+        isOpen = true;
+      });
+      objFileInput.addEventListener("change", (event) => {
+        const [file] = event.target.files;
+
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.addEventListener("load", () => {
+          try {
+            loadObjText(String(reader.result), file.name);
+          } catch (error) {
+            uploadStatus.textContent = `Could not load ${file.name}: ${error.message}`;
+          }
+        });
+        reader.addEventListener("error", () => {
+          uploadStatus.textContent = `Could not read ${file.name}.`;
+        });
+        uploadStatus.textContent = `Loading ${file.name}...`;
+        reader.readAsText(file);
+      });
+
+      const floor = new THREE.Mesh(
+        new THREE.CircleGeometry(4.2, 96),
+        new THREE.MeshStandardMaterial({
+          color: 0x0f172a,
+          roughness: 0.85,
+          metalness: 0.05,
+        }),
+      );
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = -1.55;
+      floor.receiveShadow = true;
+      scene.add(floor);
+
+      scene.add(new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 1.7));
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+      keyLight.position.set(4, 5, 3);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.set(1024, 1024);
+      scene.add(keyLight);
+
+      const fillLight = new THREE.PointLight(0x38bdf8, 1.8, 10);
+      fillLight.position.set(-3, 1.5, 2.5);
+      scene.add(fillLight);
+
+      const raycaster = new THREE.Raycaster();
+      const pointer = new THREE.Vector2();
+      const dragState = {
+        active: false,
+        moved: false,
+        startX: 0,
+        startY: 0,
+        previousX: 0,
+        previousY: 0,
+      };
+
+      const closedTop = {
+        position: topFace.position.clone(),
+        rotation: topFace.rotation.x,
+        opacity: 1,
+        modelScale: 0.1,
+      };
+      const openTop = {
+        position: new THREE.Vector3(0, half + 1.25, -0.35),
+        rotation: -Math.PI / 2 - 1.35,
+        opacity: 0.18,
+        modelScale: 1,
+      };
+
+      function setPointerFromEvent(event) {
+        const rect = canvas.getBoundingClientRect();
+        pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      }
+
+      function toggleCube(event) {
+        setPointerFromEvent(event);
+        raycaster.setFromCamera(pointer, camera);
+        const hits = raycaster.intersectObjects(interactiveMeshes, false);
+        if (hits.length > 0) {
+          isOpen = !isOpen;
+        }
+      }
+
+      canvas.addEventListener("pointerdown", (event) => {
+        dragState.active = true;
+        dragState.moved = false;
+        dragState.startX = event.clientX;
+        dragState.startY = event.clientY;
+        dragState.previousX = event.clientX;
+        dragState.previousY = event.clientY;
+        canvas.classList.add("dragging");
+        canvas.setPointerCapture(event.pointerId);
+      });
+
+      canvas.addEventListener("pointermove", (event) => {
+        if (!dragState.active) return;
+
+        const deltaX = event.clientX - dragState.previousX;
+        const deltaY = event.clientY - dragState.previousY;
+        cubeGroup.rotation.y += deltaX * 0.01;
+        cubeGroup.rotation.x += deltaY * 0.01;
+        cubeGroup.rotation.x = THREE.MathUtils.clamp(
+          cubeGroup.rotation.x,
+          -Math.PI / 2,
+          Math.PI / 2,
+        );
+
+        dragState.previousX = event.clientX;
+        dragState.previousY = event.clientY;
+        dragState.moved =
+          dragState.moved ||
+          Math.hypot(
+            event.clientX - dragState.startX,
+            event.clientY - dragState.startY,
+          ) > 6;
+      });
+
+      canvas.addEventListener("pointerup", (event) => {
+        dragState.active = false;
+        canvas.classList.remove("dragging");
+        canvas.releasePointerCapture(event.pointerId);
+        if (!dragState.moved) toggleCube(event);
+      });
+
+      canvas.addEventListener("pointercancel", () => {
+        dragState.active = false;
+        canvas.classList.remove("dragging");
+      });
+
+      function resizeRenderer() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+      }
+      window.addEventListener("resize", resizeRenderer);
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        const target = isOpen ? openTop : closedTop;
+        topFace.position.lerp(target.position, 0.12);
+        topFace.rotation.x = THREE.MathUtils.lerp(
+          topFace.rotation.x,
+          target.rotation,
+          0.12,
+        );
+        topMaterial.opacity = THREE.MathUtils.lerp(
+          topMaterial.opacity,
+          target.opacity,
+          0.12,
+        );
+        const targetModelScale = target.modelScale * activeModelScale;
+        modelAnchor.scale.lerp(
+          new THREE.Vector3(
+            targetModelScale,
+            targetModelScale,
+            targetModelScale,
+          ),
+          0.12,
+        );
+        modelAnchor.rotation.y += 0.012;
+        modelAnchor.rotation.x += 0.004;
+
+        renderer.render(scene, camera);
+      }
+
+      animate();
+    </script>
+  </body>
+</html>
